@@ -198,7 +198,7 @@ class _OnboardingPage extends StatelessWidget {
                 stops: const [0.4, 0.72, 1.0],
                 colors: [
                   Colors.transparent,
-                  const Color(0xFF0D0A3A).withOpacity(0.7),
+                  const Color(0xFF0D0A3A).withValues(alpha: 0.7),
                   const Color(0xFF0D0A3A),
                 ],
               ),
@@ -227,7 +227,7 @@ class _OnboardingPage extends StatelessWidget {
               Text(
                 data.subtitle,
                 style: GoogleFonts.poppins(
-                  color: Colors.white.withOpacity(0.85),
+                  color: Colors.white.withValues(alpha: 0.85),
                   fontSize: 14,
                   fontWeight: FontWeight.w400,
                   height: 1.6,
@@ -283,7 +283,7 @@ class _BottomSection extends StatelessWidget {
                   borderRadius: BorderRadius.circular(5),
                   color: isActive
                       ? const Color(0xFF2563EB)
-                      : Colors.white.withOpacity(0.35),
+                      : Colors.white.withValues(alpha: 0.35),
                 ),
               );
             }),

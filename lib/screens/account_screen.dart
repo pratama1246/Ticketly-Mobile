@@ -8,6 +8,7 @@ import 'home_page.dart';
 import 'my_tickets_screen.dart';
 import 'edit_profile_screen.dart';
 import 'login_screen.dart';
+import 'legal_screen.dart';
 
 class AccountScreen extends StatefulWidget {
   const AccountScreen({super.key});
@@ -208,6 +209,42 @@ class _AccountScreenState extends State<AccountScreen> {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
                                         content: Text('Fitur Pengaturan belum tersedia'),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                _MenuCard(
+                                  icon: Icons.description_outlined,
+                                  title: 'Syarat & Ketentuan',
+                                  iconColor: const Color(0xFF3B82F6),
+                                  iconBgColor: const Color(0xFFEFF6FF),
+                                  textColor: AppColors.textPrimary,
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => const LegalScreen(
+                                          title: 'Syarat & Ketentuan',
+                                          endpoint: '/api/terms',
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                _MenuCard(
+                                  icon: Icons.privacy_tip_outlined,
+                                  title: 'Kebijakan Privasi',
+                                  iconColor: const Color(0xFF10B981),
+                                  iconBgColor: const Color(0xFFECFDF5),
+                                  textColor: AppColors.textPrimary,
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => const LegalScreen(
+                                          title: 'Kebijakan Privasi',
+                                          endpoint: '/api/privacy',
+                                        ),
                                       ),
                                     );
                                   },

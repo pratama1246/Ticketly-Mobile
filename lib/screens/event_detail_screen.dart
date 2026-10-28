@@ -141,16 +141,16 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
   @override
   Widget build(BuildContext context) {
     // Intercept hardware back button
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: !_isTicketSelectionMode,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         if (_isTicketSelectionMode) {
           setState(() {
             _isTicketSelectionMode = false;
           });
           _scrollToTop();
-          return false;
         }
-        return true;
       },
       child: Scaffold(
         backgroundColor: AppColors.screenBg,
@@ -628,7 +628,7 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
                 child: ElevatedButton(
                   onPressed: totalQty > 0
                       ? () {
-                          _navigateToCheckout(context);
+                          _navigateToCheckout();
                         }
                       : null,
                   style: ElevatedButton.styleFrom(
@@ -657,7 +657,7 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
   // ─────────────────────────────────────────────
   // Navigate to Checkout Screen
   // ─────────────────────────────────────────────
-  void _navigateToCheckout(BuildContext context) async {
+  void _navigateToCheckout() async {
     final loggedIn = await AuthService.isLoggedIn();
     if (!loggedIn) {
       if (mounted) {
@@ -694,7 +694,7 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
     if (imageUrl == null || imageUrl.isEmpty) return;
     showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.9),
+      barrierColor: Colors.black.withValues(alpha: 0.9),
       builder: (context) => _ZoomableImageDialog(imageUrl: imageUrl),
     );
   }
@@ -987,8 +987,8 @@ class _ZoomableImageDialogState extends State<_ZoomableImageDialog> {
     } else {
       final position = _doubleTapDetails!.localPosition;
       _transformationController.value = Matrix4.identity()
-        ..translate(-position.dx, -position.dy)
-        ..scale(2.0);
+        ..translateByDouble(-position.dx, -position.dy, 0.0, 1.0)
+        ..scaleByDouble(2.0, 2.0, 1.0, 1.0);
     }
   }
 
@@ -1023,7 +1023,7 @@ class _ZoomableImageDialogState extends State<_ZoomableImageDialog> {
             top: 40,
             right: 16,
             child: CircleAvatar(
-              backgroundColor: Colors.black.withOpacity(0.5),
+              backgroundColor: Colors.black.withValues(alpha: 0.5),
               child: IconButton(
                 icon: const Icon(Icons.close, color: Colors.white),
                 onPressed: () => Navigator.pop(context),

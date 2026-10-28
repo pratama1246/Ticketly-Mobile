@@ -57,37 +57,53 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> {
     }
 
     try {
-      // 1. Fetch all orders
+      // 1. Fetch completed orders with items pre-fetched in a single optimized request
       final response = await http.get(
-        Uri.parse('${ApiConstants.baseUrl}/api/orders'),
+        Uri.parse('${ApiConstants.baseUrl}/api/orders?status=completed&include=items'),
         headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final decoded = json.decode(response.body);
         if (decoded['status'] == 'success' && decoded['data'] != null) {
           final List ordersRaw = decoded['data'];
           
-          // Filter completed orders
-          final completedOrdersList = ordersRaw
-              .where((o) => o['status'] == 'completed')
-              .toList();
-
           final List<OrderDetailModel> detailedOrders = [];
+          final List<dynamic> ordersNeedingDetail = [];
 
-          // 2. Fetch details for each completed order (to get items/tickets)
-          for (final order in completedOrdersList) {
-            final orderId = order['id'];
-            final detailResponse = await http.get(
-              Uri.parse('${ApiConstants.baseUrl}/api/orders/$orderId'),
-              headers: {'Authorization': 'Bearer $token'},
-            ).timeout(const Duration(seconds: 5));
-
-            if (detailResponse.statusCode == 200) {
-              final detailDecoded = json.decode(detailResponse.body);
-              if (detailDecoded['status'] == 'success' && detailDecoded['data'] != null) {
-                detailedOrders.add(OrderDetailModel.fromJson(detailDecoded['data']));
+          for (final order in ordersRaw) {
+            if (order['status'] == 'completed') {
+              if (order['items'] != null && (order['items'] as List).isNotEmpty) {
+                detailedOrders.add(OrderDetailModel.fromJson(Map<String, dynamic>.from(order)));
+              } else {
+                ordersNeedingDetail.add(order);
               }
+            }
+          }
+
+          // Fallback in parallel if server didn't include items
+          if (ordersNeedingDetail.isNotEmpty) {
+            final detailFutures = ordersNeedingDetail.map((order) async {
+              try {
+                final orderId = order['id'];
+                final detailResponse = await http.get(
+                  Uri.parse('${ApiConstants.baseUrl}/api/orders/$orderId'),
+                  headers: {'Authorization': 'Bearer $token'},
+                ).timeout(const Duration(seconds: 5));
+
+                if (detailResponse.statusCode == 200) {
+                  final detailDecoded = json.decode(detailResponse.body);
+                  if (detailDecoded['status'] == 'success' && detailDecoded['data'] != null) {
+                    return OrderDetailModel.fromJson(Map<String, dynamic>.from(detailDecoded['data']));
+                  }
+                }
+              } catch (_) {}
+              return null;
+            });
+
+            final fetched = await Future.wait(detailFutures);
+            for (final item in fetched) {
+              if (item != null) detailedOrders.add(item);
             }
           }
 

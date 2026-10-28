@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../models/order_detail_model.dart';
 import '../theme/app_theme.dart';
 import '../widgets/bottom_nav_bar.dart';
@@ -49,13 +50,10 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Generate QR Code URL using QRServer API
-    final qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${widget.ticket.ticketCode}';
-
-    // Normalize address mapping
-    final String venue = widget.ticket.eventName.contains('RIIZE')
-        ? 'ICE BSD Hall 5-6'
-        : 'Jakarta International Stadium';
+    // Dynamic venue resolution from ticket model
+    final String venue = widget.ticket.venue.isNotEmpty
+        ? widget.ticket.venue
+        : 'Venue Lokasi Event';
 
     return Scaffold(
       backgroundColor: const Color(0xFFFFFBEB),
@@ -200,27 +198,12 @@ class _TicketDetailScreenState extends State<TicketDetailScreen> {
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(color: const Color(0xFFE5E7EB), width: 1),
                                 ),
-                                child: Image.network(
-                                  qrUrl,
-                                  width: 160,
-                                  height: 160,
-                                  fit: BoxFit.contain,
-                                  loadingBuilder: (context, child, loadingProgress) {
-                                    if (loadingProgress == null) return child;
-                                    return SizedBox(
-                                      width: 160,
-                                      height: 160,
-                                      child: Center(
-                                        child: CircularProgressIndicator(
-                                          value: loadingProgress.expectedTotalBytes != null
-                                              ? loadingProgress.cumulativeBytesLoaded /
-                                                  loadingProgress.expectedTotalBytes!
-                                              : null,
-                                          color: AppColors.bluePrimary,
-                                        ),
-                                      ),
-                                    );
-                                  },
+                                child: QrImageView(
+                                  data: widget.ticket.ticketCode,
+                                  version: QrVersions.auto,
+                                  size: 160.0,
+                                  backgroundColor: Colors.white,
+                                  gapless: true,
                                 ),
                               ),
                               const SizedBox(height: 16),

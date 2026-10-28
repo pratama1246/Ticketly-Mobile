@@ -121,7 +121,7 @@ class AuthService {
         };
       }
     } catch (e) {
-      return {'success': true, 'message': 'Mock: Kode verifikasi telah dikirim ke $email (Server offline)'};
+      return {'success': false, 'message': 'Gagal terhubung ke server. Periksa koneksi internet Anda.'};
     }
   }
 
@@ -144,10 +144,7 @@ class AuthService {
         };
       }
     } catch (e) {
-      if (code == '123456' || code.length == 6) {
-        return {'success': true, 'message': 'Mock: Kode berhasil diverifikasi.'};
-      }
-      return {'success': false, 'message': 'Kode verifikasi salah.'};
+      return {'success': false, 'message': 'Gagal memverifikasi kode. Periksa koneksi internet Anda.'};
     }
   }
 
@@ -180,7 +177,7 @@ class AuthService {
         };
       }
     } catch (e) {
-      return {'success': true, 'message': 'Mock: Kata sandi berhasil diperbarui.'};
+      return {'success': false, 'message': 'Gagal memperbarui kata sandi. Periksa koneksi internet Anda.'};
     }
   }
 

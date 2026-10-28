@@ -21,6 +21,12 @@ class OrderDetailModel {
   final int orderTotal;
   final String status;
   final String paymentMethod;
+  final String? paymentVaNumber;
+  final String? paymentBillKey;
+  final String? paymentBillerCode;
+  final String? paymentQrUrl;
+  final String? paymentDeeplinkUrl;
+  final String? paymentExpiredAt;
   final String createdAt;
   final List<OrderItemModel> items;
 
@@ -30,6 +36,12 @@ class OrderDetailModel {
     required this.orderTotal,
     required this.status,
     required this.paymentMethod,
+    this.paymentVaNumber,
+    this.paymentBillKey,
+    this.paymentBillerCode,
+    this.paymentQrUrl,
+    this.paymentDeeplinkUrl,
+    this.paymentExpiredAt,
     required this.createdAt,
     required this.items,
   });
@@ -40,6 +52,12 @@ class OrderDetailModel {
     final orderTotal = _parseInt(json['order_total']);
     final status = json['status'] ?? '';
     final paymentMethod = json['payment_method'] ?? '';
+    final paymentVaNumber = json['payment_va_number']?.toString();
+    final paymentBillKey = json['payment_bill_key']?.toString();
+    final paymentBillerCode = json['payment_biller_code']?.toString();
+    final paymentQrUrl = json['payment_qr_url']?.toString();
+    final paymentDeeplinkUrl = json['payment_deeplink_url']?.toString();
+    final paymentExpiredAt = json['payment_expired_at']?.toString() ?? json['expires_at']?.toString();
     
     // Parse created_at to clean Indonesian date format
     String dateStr = '';
@@ -67,6 +85,12 @@ class OrderDetailModel {
       orderTotal: orderTotal,
       status: status,
       paymentMethod: paymentMethod,
+      paymentVaNumber: paymentVaNumber,
+      paymentBillKey: paymentBillKey,
+      paymentBillerCode: paymentBillerCode,
+      paymentQrUrl: paymentQrUrl,
+      paymentDeeplinkUrl: paymentDeeplinkUrl,
+      paymentExpiredAt: paymentExpiredAt,
       createdAt: dateStr.isNotEmpty ? dateStr : (json['created_at'] ?? ''),
       items: itemsList,
     );
@@ -79,11 +103,15 @@ class OrderItemModel {
   final String ticketName;
   final String ticketCategory;
   final String eventName;
+  final String venue;
   final String eventDate;
   final String eventTime;
   final String seatLabel;
   final int pricePerTicket;
   final String? eventPoster;
+  final String? attendeeName;
+  final String? attendeeEmail;
+  final String? attendeeIdentityNumber;
 
   const OrderItemModel({
     required this.id,
@@ -91,11 +119,15 @@ class OrderItemModel {
     required this.ticketName,
     required this.ticketCategory,
     required this.eventName,
+    required this.venue,
     required this.eventDate,
     required this.eventTime,
     required this.seatLabel,
     required this.pricePerTicket,
     this.eventPoster,
+    this.attendeeName,
+    this.attendeeEmail,
+    this.attendeeIdentityNumber,
   });
 
   factory OrderItemModel.fromJson(Map<String, dynamic> json) {
@@ -104,9 +136,13 @@ class OrderItemModel {
     final ticketName = json['ticket_name'] ?? '';
     final ticketCategory = json['ticket_category'] ?? '';
     final eventName = json['event_name'] ?? '';
+    final venue = json['venue']?.toString() ?? json['event_venue']?.toString() ?? '';
     final pricePerTicket = _parseInt(json['price_per_ticket']);
     final seatLabel = json['seat_label'] ?? 'Free Seating';
     final eventPoster = ApiService.normalizeImageUrl(json['event_poster']);
+    final attendeeName = json['attendee_name']?.toString();
+    final attendeeEmail = json['attendee_email']?.toString();
+    final attendeeIdentityNumber = json['attendee_identity_number']?.toString();
 
     // Parse event date and time
     String dateStr = '';
@@ -128,11 +164,15 @@ class OrderItemModel {
       ticketName: ticketName,
       ticketCategory: ticketCategory,
       eventName: eventName,
+      venue: venue,
       eventDate: dateStr,
       eventTime: timeStr,
       seatLabel: seatLabel,
       pricePerTicket: pricePerTicket,
       eventPoster: eventPoster,
+      attendeeName: attendeeName,
+      attendeeEmail: attendeeEmail,
+      attendeeIdentityNumber: attendeeIdentityNumber,
     );
   }
 }

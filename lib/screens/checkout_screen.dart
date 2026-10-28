@@ -10,6 +10,8 @@ import '../models/event_detail_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_service.dart';
 import '../theme/app_theme.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'my_tickets_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -54,6 +56,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   final _nikController = TextEditingController();
   final _dobController = TextEditingController();
 
+  // Multi-attendee controllers per ticket item
+  final List<Map<String, TextEditingController>> _attendeeControllers = [];
+
+  // Voucher Promo State
+  final _voucherController = TextEditingController();
+  String? _appliedVoucherCode;
+  int _discountAmount = 0;
+  bool _isValidatingVoucher = false;
+
   String _waConsent = 'iya'; // 'iya' or 'tidak'
   bool _agreeTnC = false;
   bool _agreeProcessing = false;
@@ -71,6 +82,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String? _createdTrxId;
   int? _createdGrandTotal;
   DateTime? _expiresAt;
+  String? _paymentVaNumber;
+  String? _paymentBillKey;
+  String? _paymentBillerCode;
+  String? _paymentQrUrl;
+  String? _paymentDeeplinkUrl;
 
   // Dual Timers
   Timer? _checkoutTimer;
@@ -82,6 +98,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void initState() {
     super.initState();
+    for (int i = 0; i < widget.totalQty; i++) {
+      _attendeeControllers.add({
+        'name': TextEditingController(),
+        'email': TextEditingController(),
+        'nik': TextEditingController(),
+      });
+    }
     _loadUserInfo();
     _loadPaymentMethods();
     _calculatePricing();
@@ -98,6 +121,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     _phoneController.dispose();
     _nikController.dispose();
     _dobController.dispose();
+    _voucherController.dispose();
+    for (final map in _attendeeControllers) {
+      map['name']?.dispose();
+      map['email']?.dispose();
+      map['nik']?.dispose();
+    }
     super.dispose();
   }
 
@@ -338,6 +367,62 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
   }
 
+  Future<void> _applyVoucher() async {
+    final code = _voucherController.text.trim();
+    if (code.isEmpty) {
+      _showToast('Silakan masukkan kode voucher.');
+      return;
+    }
+
+    setState(() => _isValidatingVoucher = true);
+    final token = await AuthService.getToken();
+
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConstants.baseUrl}/api/vouchers/apply'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'voucher_code': code,
+          'total_amount': _apiSubTotal,
+          'event_id': widget.event.id,
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      final decoded = json.decode(response.body);
+      setState(() => _isValidatingVoucher = false);
+
+      if (response.statusCode == 200 && decoded['status'] == 'success') {
+        final data = decoded['data'];
+        final discount = _parseInt(data['discount_amount']);
+        setState(() {
+          _appliedVoucherCode = data['code']?.toString() ?? code;
+          _discountAmount = discount;
+          final baseTotal = _apiSubTotal + _apiTaxAmount + _apiPlatformFee + _apiAdminFee;
+          _apiGrandTotal = (baseTotal - discount) > 0 ? (baseTotal - discount) : 0;
+        });
+        _showToast(decoded['message'] ?? 'Voucher berhasil diterapkan!');
+      } else {
+        _showToast(decoded['message'] ?? 'Kode voucher tidak valid.');
+      }
+    } catch (e) {
+      setState(() => _isValidatingVoucher = false);
+      _showToast('Gagal memverifikasi voucher: $e');
+    }
+  }
+
+  void _removeVoucher() {
+    setState(() {
+      _appliedVoucherCode = null;
+      _voucherController.clear();
+      _discountAmount = 0;
+      _apiGrandTotal = _apiSubTotal + _apiTaxAmount + _apiPlatformFee + _apiAdminFee;
+    });
+    _showToast('Voucher dihapus.');
+  }
+
   int _parseInt(dynamic value) {
     if (value == null) return 0;
     if (value is int) return value;
@@ -377,7 +462,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
     });
 
-    final body = {
+    final Map<String, dynamic> body = {
       'first_name': _firstNameController.text.trim(),
       'last_name': _lastNameController.text.trim(),
       'email': _emailController.text.trim(),
@@ -386,6 +471,32 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       'payment_method': _selectedMethodCode,
       'tickets': ticketsPayload,
     };
+
+    if (_appliedVoucherCode != null && _appliedVoucherCode!.isNotEmpty) {
+      body['voucher_code'] = _appliedVoucherCode;
+    }
+
+    if (widget.totalQty > 1 && _attendeeControllers.isNotEmpty) {
+      final List<Map<String, String>> attendeesPayload = [];
+      for (int i = 0; i < widget.totalQty; i++) {
+        if (i < _attendeeControllers.length) {
+          final ctrl = _attendeeControllers[i];
+          final name = ctrl['name']?.text.trim();
+          final email = ctrl['email']?.text.trim();
+          final nik = ctrl['nik']?.text.trim();
+          attendeesPayload.add({
+            'name': (name != null && name.isNotEmpty)
+                ? name
+                : '${_firstNameController.text.trim()} ${_lastNameController.text.trim()}'.trim(),
+            'email': (email != null && email.isNotEmpty) ? email : _emailController.text.trim(),
+            'identity_number': (nik != null && nik.isNotEmpty) ? nik : _nikController.text.trim(),
+          });
+        }
+      }
+      if (attendeesPayload.isNotEmpty) {
+        body['attendees'] = attendeesPayload;
+      }
+    }
 
     try {
       final response = await http.post(
@@ -406,8 +517,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
         setState(() {
           _createdOrderId = _parseInt(data['order_id']);
-          _createdTrxId = data['trx_id'];
+          _createdTrxId = data['trx_id']?.toString();
           _createdGrandTotal = _parseInt(data['grand_total']);
+          _paymentVaNumber = data['payment_va_number']?.toString();
+          _paymentBillKey = data['payment_bill_key']?.toString();
+          _paymentBillerCode = data['payment_biller_code']?.toString();
+          _paymentQrUrl = data['payment_qr_url']?.toString();
+          _paymentDeeplinkUrl = data['payment_deeplink_url']?.toString();
           _expiresAt = parsedExpiresAt;
           _currentStep = 5;
           _isLoading = false;
@@ -693,8 +809,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     setState(() => _isLoading = true);
     final token = await AuthService.getToken();
     if (token == null) {
-      setState(() => _isLoading = false);
-      Navigator.pop(context);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        Navigator.pop(context);
+      }
       return;
     }
 
@@ -722,44 +840,50 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  // Copy VA number helper
-  void _copyToClipboard(String text) {
+  // Copy helper
+  void _copyToClipboard(String text, [String label = 'Nomor Virtual Account']) {
     Clipboard.setData(ClipboardData(text: text));
-    _showToast('Nomor Virtual Account berhasil disalin.');
+    _showToast('$label berhasil disalin.');
   }
 
-  // Generates dummy VA based on selected payment code and order ID
+  // Resolves real VA or Bill Key from Midtrans response
   String _getVirtualAccountNumber() {
-    final idStr = (_createdOrderId ?? 1).toString();
-    if (_selectedMethodCode == 'bca') {
-      return '88004${idStr.padLeft(9, '0')}';
-    } else if (_selectedMethodCode == 'bri') {
-      return '88004252${idStr.padLeft(6, '0')}';
-    } else if (_selectedMethodCode == 'bni') {
-      return '827${idStr.padLeft(11, '0')}';
-    } else if (_selectedMethodCode == 'mandiri_bill') {
-      return '89608${idStr.padLeft(9, '0')}';
+    if (_paymentVaNumber != null && _paymentVaNumber!.isNotEmpty) {
+      return _paymentVaNumber!;
     }
-    return '88004252937788'; // fallback from mockup screenshot
+    if (_paymentBillKey != null && _paymentBillKey!.isNotEmpty) {
+      return _paymentBillKey!;
+    }
+    return '-';
   }
 
-  // Generates dummy payment instructions text based on selected payment method code
+  // Generates authentic payment instructions based on Midtrans payment type
   List<String> _getPaymentInstructions() {
-    if (_selectedMethodType == 'ewallet') {
+    if ((_paymentQrUrl != null && _paymentQrUrl!.isNotEmpty) || _selectedMethodType == 'ewallet' || _selectedMethodCode == 'qris') {
       return [
-        'Buka aplikasi e-wallet Anda.',
-        'Pilih menu **bayar / scan QRIS**.',
-        'Masukkan nomor transaksi atau pindai QR code.',
-        'Periksa detail tagihan Anda.',
-        'Masukkan PIN Anda untuk menyelesaikan pembayaran.'
+        'Buka aplikasi e-wallet (GoPay, ShopeePay, OVO, Dana) atau Mobile Banking Anda.',
+        'Pilih menu **Bayar / Scan QRIS**.',
+        'Pindai (scan) kode QR yang tampil di atas, atau klik tombol **"Buka E-Wallet"** jika tersedia.',
+        'Periksa nama merchant dan total tagihan.',
+        'Masukkan PIN Anda untuk menyelesaikan transaksi.'
       ];
     }
+    if (_paymentBillerCode != null && _paymentBillKey != null) {
+      return [
+        'Buka aplikasi Livin by Mandiri atau ATM Mandiri.',
+        'Pilih menu **Bayar/Beli** lalu pilih **Multi Payment**.',
+        'Masukkan Kode Perusahaan / Biller: **$_paymentBillerCode**.',
+        'Masukkan Kode Pembayaran / Bill Key: **$_paymentBillKey**.',
+        'Periksa rincian tagihan dan konfirmasi pembayaran.'
+      ];
+    }
+    final va = _getVirtualAccountNumber();
     return [
-      'Buka aplikasi Mobile Banking atau ATM Anda.',
-      'Pilih menu **Transfer Virtual Account**.',
-      'Masukkan Nomor VA: **${_getVirtualAccountNumber()}**.',
-      'Periksa detail nama dan total tagihan.',
-      'Masukkan PIN Anda dan simpan bukti transaksi.'
+      'Buka aplikasi Mobile Banking atau ATM ${_selectedMethodName ?? "Bank"} Anda.',
+      'Pilih menu **Transfer / Pembayaran Virtual Account**.',
+      'Masukkan Nomor Virtual Account: **$va**.',
+      'Periksa detail nama pemesan dan total nominal tagihan.',
+      'Masukkan PIN Anda dan simpan bukti transfer transaksi.'
     ];
   }
 
@@ -1222,6 +1346,120 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ),
           const SizedBox(height: 20),
 
+          if (widget.totalQty > 1) ...[
+            Row(
+              children: [
+                const Icon(Icons.people_alt_outlined, color: AppColors.bluePrimary, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Data Pemegang Tiket Lainnya',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Tiket #1 otomatis menggunakan data pemesan di atas. Silakan isi data pemegang tiket #2 sampai #${widget.totalQty}.',
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 16),
+            ...List.generate(widget.totalQty - 1, (idx) {
+              final index = idx + 1; // 1 to totalQty - 1
+              final ctrl = _attendeeControllers[index];
+              return Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.borderDefault),
+                  boxShadow: AppShadows.cardShadow,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Tiket #${index + 1}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.bluePrimary,
+                          ),
+                        ),
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: const Icon(Icons.copy_rounded, size: 14, color: AppColors.bluePrimary),
+                          label: Text(
+                            'Samakan Pemesan',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.bluePrimary,
+                            ),
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              ctrl['name']?.text = '${_firstNameController.text.trim()} ${_lastNameController.text.trim()}'.trim();
+                              ctrl['email']?.text = _emailController.text.trim();
+                              ctrl['nik']?.text = _nikController.text.trim();
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _buildFieldLabel('Nama Lengkap', isRequired: true),
+                    TextFormField(
+                      controller: ctrl['name'],
+                      decoration: _buildInputDecoration('Nama pemegang tiket #${index + 1}'),
+                      style: GoogleFonts.poppins(fontSize: 13),
+                      validator: (val) => val == null || val.trim().isEmpty ? 'Nama pemegang tiket #${index + 1} wajib diisi' : null,
+                    ),
+                    const SizedBox(height: 10),
+                    _buildFieldLabel('Email', isRequired: true),
+                    TextFormField(
+                      controller: ctrl['email'],
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: _buildInputDecoration('email@domain.com'),
+                      style: GoogleFonts.poppins(fontSize: 13),
+                      validator: (val) {
+                        if (val == null || val.trim().isEmpty) return 'Email pemegang tiket #${index + 1} wajib diisi';
+                        if (!RegExp(r'^[\w\-.]+@([\w\-]+\.)+[\w\-]{2,}$').hasMatch(val.trim())) {
+                          return 'Format email tidak valid';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    _buildFieldLabel('Nomor Identitas (NIK/KTP)', isRequired: true),
+                    TextFormField(
+                      controller: ctrl['nik'],
+                      keyboardType: TextInputType.text,
+                      decoration: _buildInputDecoration('Nomor NIK/KTP pemegang tiket #${index + 1}'),
+                      style: GoogleFonts.poppins(fontSize: 13),
+                      validator: (val) => val == null || val.trim().isEmpty ? 'NIK pemegang tiket #${index + 1} wajib diisi' : null,
+                    ),
+                  ],
+                ),
+              );
+            }),
+            const SizedBox(height: 8),
+          ],
+
           Text(
             'Saya setuju untuk menerima notifikasi terkait pemesanan tiket berikut melalui nomor WhatsApp saya.',
             style: GoogleFonts.poppins(
@@ -1232,38 +1470,36 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Radio<String>(
-                value: 'iya',
-                groupValue: _waConsent,
-                activeColor: AppColors.bluePrimary,
-                onChanged: (val) {
-                  setState(() {
-                    _waConsent = val!;
-                  });
-                },
-              ),
-              Text(
-                'Iya',
-                style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.black),
-              ),
-              const SizedBox(width: 30),
-              Radio<String>(
-                value: 'tidak',
-                groupValue: _waConsent,
-                activeColor: AppColors.bluePrimary,
-                onChanged: (val) {
-                  setState(() {
-                    _waConsent = val!;
-                  });
-                },
-              ),
-              Text(
-                'Tidak',
-                style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.black),
-              ),
-            ],
+          RadioGroup<String>(
+            groupValue: _waConsent,
+            onChanged: (val) {
+              if (val != null) {
+                setState(() {
+                  _waConsent = val;
+                });
+              }
+            },
+            child: Row(
+              children: [
+                const Radio<String>(
+                  value: 'iya',
+                  activeColor: AppColors.bluePrimary,
+                ),
+                Text(
+                  'Iya',
+                  style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.black),
+                ),
+                const SizedBox(width: 30),
+                const Radio<String>(
+                  value: 'tidak',
+                  activeColor: AppColors.bluePrimary,
+                ),
+                Text(
+                  'Tidak',
+                  style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.black),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 24),
 
@@ -1817,9 +2053,187 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     _buildConfirmDetailRow('Nomor Telepon', _phoneController.text),
                     const SizedBox(height: 10),
                     _buildConfirmDetailRow('Nomor Identitas', _nikController.text),
+                    if (widget.totalQty > 1) ...[
+                      const Divider(height: 24, color: AppColors.borderDefault),
+                      Text(
+                        'Data Pemegang Tiket',
+                        style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black),
+                      ),
+                      const SizedBox(height: 8),
+                      ...List.generate(widget.totalQty, (index) {
+                        final ctrl = _attendeeControllers[index];
+                        final name = ctrl['name']?.text.trim();
+                        final finalName = (name != null && name.isNotEmpty)
+                            ? name
+                            : '${_firstNameController.text.trim()} ${_lastNameController.text.trim()}'.trim();
+                        final nik = ctrl['nik']?.text.trim();
+                        final finalNik = (nik != null && nik.isNotEmpty) ? nik : _nikController.text.trim();
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 6.0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Tiket #${index + 1}: $finalName',
+                                style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textSecondary),
+                              ),
+                              Text(
+                                finalNik,
+                                style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.black),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
                   ],
                 ),
               ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        // Kode Promo / Voucher Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: _appliedVoucherCode != null ? const Color(0xFF22C55E) : AppColors.borderDefault,
+            ),
+            boxShadow: AppShadows.cardShadow,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.local_offer_outlined,
+                    size: 18,
+                    color: _appliedVoucherCode != null ? const Color(0xFF16A34A) : AppColors.bluePrimary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Punya Kode Promo / Voucher?',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (_appliedVoucherCode != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFDCFCE7),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF86EFAC)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _appliedVoucherCode!,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: const Color(0xFF166534),
+                                ),
+                              ),
+                              Text(
+                                'Hemat ${_formatCurrency(_discountAmount)}',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  color: const Color(0xFF15803D),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      TextButton(
+                        onPressed: _removeVoucher,
+                        child: Text(
+                          'Hapus',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: const Color(0xFFDC2626),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 46,
+                        child: TextField(
+                          controller: _voucherController,
+                          textCapitalization: TextCapitalization.characters,
+                          decoration: InputDecoration(
+                            hintText: 'Masukkan kode voucher',
+                            hintStyle: GoogleFonts.poppins(fontSize: 12, color: AppColors.textSecondary),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: AppColors.borderDefault),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: AppColors.borderDefault),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: AppColors.bluePrimary, width: 1.5),
+                            ),
+                          ),
+                          style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    SizedBox(
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: _isValidatingVoucher ? null : _applyVoucher,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.bluePrimary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                        ),
+                        child: _isValidatingVoucher
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : Text(
+                                'Terapkan',
+                                style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.bold),
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -1865,6 +2279,10 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               const Divider(height: 20, color: AppColors.borderDefault),
               _buildPriceRow('Subtotal Tiket', _apiSubTotal),
               const SizedBox(height: 8),
+              if (_discountAmount > 0) ...[
+                _buildPriceRow('Diskon Voucher (${_appliedVoucherCode ?? ""})', _discountAmount, isDiscount: true),
+                const SizedBox(height: 8),
+              ],
               _buildPriceRow('PPN (10%)', _apiTaxAmount),
               const SizedBox(height: 8),
               _buildPriceRow('Biaya Admin', _apiAdminFee),
@@ -2060,20 +2478,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  Widget _buildPriceRow(String label, int amount) {
+  Widget _buildPriceRow(String label, int amount, {bool isDiscount = false}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(
           label,
-          style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textSecondary),
-        ),
-        Text(
-          _formatCurrency(amount),
           style: GoogleFonts.poppins(
             fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: AppColors.textPrimary,
+            color: isDiscount ? const Color(0xFF16A34A) : AppColors.textSecondary,
+            fontWeight: isDiscount ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+        Text(
+          isDiscount ? '- ${_formatCurrency(amount.abs())}' : _formatCurrency(amount),
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            fontWeight: isDiscount ? FontWeight.bold : FontWeight.w500,
+            color: isDiscount ? const Color(0xFF16A34A) : AppColors.textPrimary,
           ),
         ),
       ],
@@ -2311,44 +2733,166 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                             ],
                           ),
                           const SizedBox(height: 12),
-                          Text(
-                            'Nomor Virtual Account',
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                va,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black,
-                                ),
-                              ),
-                              GestureDetector(
-                                onTap: () => _copyToClipboard(va),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.copy, size: 14, color: AppColors.bluePrimary),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Salin',
-                                      style: GoogleFonts.poppins(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: AppColors.bluePrimary,
+                          if (_paymentQrUrl != null && _paymentQrUrl!.isNotEmpty) ...[
+                            Center(
+                              child: Column(
+                                children: [
+                                  Text(
+                                    'Pindai Kode QRIS di Bawah Ini',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                                    ),
+                                    child: _paymentQrUrl!.startsWith('http')
+                                        ? Image.network(
+                                            _paymentQrUrl!,
+                                            width: 180,
+                                            height: 180,
+                                            fit: BoxFit.contain,
+                                            errorBuilder: (context, error, stackTrace) => QrImageView(
+                                              data: _paymentQrUrl!,
+                                              version: QrVersions.auto,
+                                              size: 180.0,
+                                            ),
+                                          )
+                                        : QrImageView(
+                                            data: _paymentQrUrl!,
+                                            version: QrVersions.auto,
+                                            size: 180.0,
+                                          ),
+                                  ),
+                                  if (_paymentDeeplinkUrl != null && _paymentDeeplinkUrl!.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    ElevatedButton.icon(
+                                      onPressed: () async {
+                                        final uri = Uri.tryParse(_paymentDeeplinkUrl!);
+                                        if (uri != null && await canLaunchUrl(uri)) {
+                                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                        } else {
+                                          _showToast('Tidak dapat membuka aplikasi e-wallet.');
+                                        }
+                                      },
+                                      icon: const Icon(Icons.open_in_new, size: 16),
+                                      label: Text(
+                                        'Buka Aplikasi E-Wallet',
+                                        style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.bold),
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppColors.bluePrimary,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                       ),
                                     ),
                                   ],
-                                ),
+                                ],
                               ),
-                            ],
-                          ),
+                            ),
+                          ] else if (_paymentBillerCode != null && _paymentBillKey != null) ...[
+                            Text(
+                              'Kode Perusahaan / Biller',
+                              style: GoogleFonts.poppins(fontSize: 11, color: AppColors.textSecondary),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _paymentBillerCode!,
+                                  style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black),
+                                ),
+                                GestureDetector(
+                                  onTap: () => _copyToClipboard(_paymentBillerCode!, 'Kode Biller'),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.copy, size: 14, color: AppColors.bluePrimary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Salin',
+                                        style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.bluePrimary),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Kode Pembayaran / Bill Key',
+                              style: GoogleFonts.poppins(fontSize: 11, color: AppColors.textSecondary),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  _paymentBillKey!,
+                                  style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black),
+                                ),
+                                GestureDetector(
+                                  onTap: () => _copyToClipboard(_paymentBillKey!, 'Bill Key'),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.copy, size: 14, color: AppColors.bluePrimary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Salin',
+                                        style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.bluePrimary),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ] else ...[
+                            Text(
+                              'Nomor Virtual Account',
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  va,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: () => _copyToClipboard(va, 'Nomor Virtual Account'),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.copy, size: 14, color: AppColors.bluePrimary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Salin',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppColors.bluePrimary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                           const Divider(height: 24, color: AppColors.borderDefault),
                           Text(
                             'Total Pembayaran',
